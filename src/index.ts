@@ -39,12 +39,43 @@ import {
 } from "./audit-logger.js";
 import {
     sanitizeErrorMessage,
+    OAUTH_SCOPES,
+    getScopesForPreset,
+    ScopePreset,
 } from "./credential-security.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Secure file permission mode for credentials
 const SECURE_FILE_MODE = 0o600;
+
+/**
+ * Get OAuth scopes based on environment configuration.
+ * 
+ * Environment variable: GMAIL_MCP_SCOPE_LEVEL
+ * Values: MINIMAL | STANDARD | FULL (default: FULL for backward compatibility)
+ * 
+ * MINIMAL: Read-only access
+ * STANDARD: Read and send access
+ * FULL: Full modify and send access (includes settings for filters/labels)
+ */
+function getConfiguredScopes(): string[] {
+    const scopeLevel = (process.env.GMAIL_MCP_SCOPE_LEVEL?.toUpperCase() || 'FULL') as ScopePreset;
+    
+    if (!['MINIMAL', 'STANDARD', 'FULL'].includes(scopeLevel)) {
+        console.warn(`Warning: Unknown GMAIL_MCP_SCOPE_LEVEL "${scopeLevel}", defaulting to FULL`);
+        return [...OAUTH_SCOPES.FULL, 'https://www.googleapis.com/auth/gmail.settings.basic'];
+    }
+    
+    const scopes = getScopesForPreset(scopeLevel);
+    
+    // Add settings.basic for filter/label operations if FULL scope
+    if (scopeLevel === 'FULL') {
+        scopes.push('https://www.googleapis.com/auth/gmail.settings.basic');
+    }
+    
+    return scopes;
+}
 
 // Configuration paths
 const CONFIG_DIR = path.join(os.homedir(), '.gmail-mcp');
@@ -172,14 +203,15 @@ async function authenticate() {
     server.listen(3000);
 
     return new Promise<void>((resolve, reject) => {
+        // Use configurable OAuth scopes
+        const configuredScopes = getConfiguredScopes();
+        
         const authUrl = oauth2Client.generateAuthUrl({
             access_type: 'offline',
-            scope: [
-                'https://www.googleapis.com/auth/gmail.modify',
-                'https://www.googleapis.com/auth/gmail.settings.basic'
-            ],
+            scope: configuredScopes,
         });
 
+        console.log(`Authenticating with scope level: ${process.env.GMAIL_MCP_SCOPE_LEVEL || 'FULL'}`);
         console.log('Please visit this URL to authenticate:', authUrl);
         open(authUrl);
 
