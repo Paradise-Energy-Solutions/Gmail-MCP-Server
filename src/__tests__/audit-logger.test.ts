@@ -3,7 +3,7 @@
  * Tests for structured audit logging in audit-logger.ts
  */
 
-import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import fs from 'fs';
 import path from 'path';

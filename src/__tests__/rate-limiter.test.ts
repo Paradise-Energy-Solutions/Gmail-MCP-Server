@@ -3,7 +3,7 @@
  * Tests for rate limiting, token bucket, and circuit breaker in rate-limiter.ts
  */
 
-import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
+import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import {
     RateLimiter,

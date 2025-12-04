@@ -522,7 +522,7 @@ const SENSITIVE_PATTERNS = [
     /\/home\/[\w\-]+\//gi,
     /\/Users\/[\w\-]+\//gi,
     // Windows paths
-    /[A-Z]:\\[\w\-\\.\\]+/gi,
+    /[A-Z]:\\[\w\-\.\\]+/gi,
     // Access tokens (Bearer tokens)
     /Bearer\s+[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]*/gi,
     // OAuth tokens (ya29.* format for Google)
