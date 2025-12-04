@@ -20,7 +20,58 @@ import {createEmailMessage, createEmailWithNodemailer} from "./utl.js";
 import { createLabel, updateLabel, deleteLabel, listLabels, findLabelByName, getOrCreateLabel, GmailLabel } from "./label-manager.js";
 import { createFilter, listFilters, getFilter, deleteFilter, filterTemplates, GmailFilterCriteria, GmailFilterAction } from "./filter-manager.js";
 
+// Security modules
+import {
+    validateSavePath,
+    validateFilename,
+    sanitizeFilename,
+} from "./validators.js";
+import {
+    LogLevel,
+} from "./audit-logger.js";
+import {
+    OAUTH_SCOPES,
+    getScopesForPreset,
+    ScopePreset,
+    enforceCredentialPermissions,
+} from "./credential-security.js";
+import {
+    SecurityManager,
+    SecurityConfig,
+} from "./security.js";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Secure file permission mode for credentials
+const SECURE_FILE_MODE = 0o600;
+
+/**
+ * Get OAuth scopes based on environment configuration.
+ * 
+ * Environment variable: GMAIL_MCP_SCOPE_LEVEL
+ * Values: MINIMAL | STANDARD | FULL (default: FULL for backward compatibility)
+ * 
+ * MINIMAL: Read-only access
+ * STANDARD: Read and send access
+ * FULL: Full modify and send access (includes settings for filters/labels)
+ */
+function getConfiguredScopes(): string[] {
+    const scopeLevel = (process.env.GMAIL_MCP_SCOPE_LEVEL?.toUpperCase() || 'FULL') as ScopePreset;
+    
+    if (!['MINIMAL', 'STANDARD', 'FULL'].includes(scopeLevel)) {
+        console.warn(`Warning: Unknown GMAIL_MCP_SCOPE_LEVEL "${scopeLevel}", defaulting to FULL`);
+        return [...OAUTH_SCOPES.FULL, 'https://www.googleapis.com/auth/gmail.settings.basic'];
+    }
+    
+    const scopes = getScopesForPreset(scopeLevel);
+    
+    // Add settings.basic for filter/label operations if FULL scope
+    if (scopeLevel === 'FULL') {
+        scopes.push('https://www.googleapis.com/auth/gmail.settings.basic');
+    }
+    
+    return scopes;
+}
 
 // Configuration paths
 const CONFIG_DIR = path.join(os.homedir(), '.gmail-mcp');
@@ -58,6 +109,43 @@ interface EmailContent {
 
 // OAuth2 configuration
 let oauth2Client: OAuth2Client;
+
+// Security manager instance
+let securityManager: SecurityManager;
+
+/**
+ * Initialize the security manager with configuration from environment
+ */
+async function initializeSecurity(): Promise<void> {
+    const config: SecurityConfig = {
+        logLevel: getLogLevelFromEnv(),
+        logFormat: 'json',
+        rateLimitPerMinute: parseInt(process.env.GMAIL_MCP_RATE_LIMIT || '250', 10),
+        dailyQuotaLimit: parseInt(process.env.GMAIL_MCP_DAILY_QUOTA || '1000000000', 10),
+        oauthKeysPath: OAUTH_PATH,
+        credentialsPath: CREDENTIALS_PATH,
+        consoleOutput: process.env.GMAIL_MCP_AUDIT_CONSOLE !== 'false',
+        piiHandling: (process.env.GMAIL_MCP_PII_MODE || 'redact') as 'redact' | 'hash' | 'domain_only' | 'omit',
+    };
+
+    // Add file logging if path is specified
+    if (process.env.GMAIL_MCP_AUDIT_LOG_PATH) {
+        config.logFilePath = process.env.GMAIL_MCP_AUDIT_LOG_PATH;
+    }
+
+    securityManager = new SecurityManager(config);
+    await securityManager.initialize();
+}
+
+/**
+ * Get log level from environment variable
+ */
+function getLogLevelFromEnv(): number {
+    const level = process.env.GMAIL_MCP_LOG_LEVEL?.toUpperCase();
+    // Use the imported LogLevel enum which has correct values:
+    // DEBUG=0, INFO=1, WARN=2, ERROR=3, SECURITY=4
+    return LogLevel[level as keyof typeof LogLevel] ?? LogLevel.INFO;
+}
 
 /**
  * Recursively extract email body content from MIME message parts
@@ -148,14 +236,15 @@ async function authenticate() {
     server.listen(3000);
 
     return new Promise<void>((resolve, reject) => {
+        // Use configurable OAuth scopes
+        const configuredScopes = getConfiguredScopes();
+        
         const authUrl = oauth2Client.generateAuthUrl({
             access_type: 'offline',
-            scope: [
-                'https://www.googleapis.com/auth/gmail.modify',
-                'https://www.googleapis.com/auth/gmail.settings.basic'
-            ],
+            scope: configuredScopes,
         });
 
+        console.log(`Authenticating with scope level: ${process.env.GMAIL_MCP_SCOPE_LEVEL || 'FULL'}`);
         console.log('Please visit this URL to authenticate:', authUrl);
         open(authUrl);
 
@@ -175,7 +264,10 @@ async function authenticate() {
             try {
                 const { tokens } = await oauth2Client.getToken(code);
                 oauth2Client.setCredentials(tokens);
-                fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(tokens));
+                // Write credentials with secure file permissions (owner read/write only)
+                fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(tokens), { mode: SECURE_FILE_MODE });
+                // Enforce file permissions as additional security measure
+                enforceCredentialPermissions(CREDENTIALS_PATH);
 
                 res.writeHead(200);
                 res.end('Authentication successful! You can close this window.');
@@ -327,6 +419,9 @@ async function main() {
         console.log('Authentication completed successfully');
         process.exit(0);
     }
+
+    // Initialize security manager
+    await initializeSecurity();
 
     // Initialize Gmail API
     const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
@@ -1131,7 +1226,7 @@ async function main() {
                         const buffer = Buffer.from(data, 'base64url');
 
                         // Determine save path and filename
-                        const savePath = validatedArgs.savePath || process.cwd();
+                        const baseSavePath = validatedArgs.savePath || process.cwd();
                         let filename = validatedArgs.filename;
                         
                         if (!filename) {
@@ -1159,13 +1254,27 @@ async function main() {
                             filename = findAttachment(messageResponse.data.payload) || `attachment-${validatedArgs.attachmentId}`;
                         }
 
-                        // Ensure save directory exists
-                        if (!fs.existsSync(savePath)) {
-                            fs.mkdirSync(savePath, { recursive: true });
+                        // SECURITY: Validate and sanitize filename to prevent path traversal
+                        const filenameValidation = validateFilename(filename);
+                        if (!filenameValidation.valid) {
+                            throw new Error(`Invalid filename: ${filenameValidation.error}`);
+                        }
+                        filename = sanitizeFilename(filename);
+
+                        // SECURITY: Validate save path to prevent path traversal attacks
+                        const fullPathToValidate = path.join(baseSavePath, filename);
+                        const savePathValidation = validateSavePath(fullPathToValidate, baseSavePath);
+                        if (!savePathValidation.valid) {
+                            throw new Error(`Invalid save path: ${savePathValidation.error}`);
                         }
 
-                        // Write file
-                        const fullPath = path.join(savePath, filename);
+                        // Ensure save directory exists
+                        if (!fs.existsSync(baseSavePath)) {
+                            fs.mkdirSync(baseSavePath, { recursive: true });
+                        }
+
+                        // Write file to validated path
+                        const fullPath = path.join(baseSavePath, filename);
                         fs.writeFileSync(fullPath, buffer);
 
                         return {
@@ -1205,6 +1314,21 @@ async function main() {
 
     const transport = new StdioServerTransport();
     server.connect(transport);
+
+    // Handle graceful shutdown
+    process.on('SIGINT', async () => {
+        if (securityManager) {
+            await securityManager.shutdown();
+        }
+        process.exit(0);
+    });
+
+    process.on('SIGTERM', async () => {
+        if (securityManager) {
+            await securityManager.shutdown();
+        }
+        process.exit(0);
+    });
 }
 
 main().catch((error) => {
