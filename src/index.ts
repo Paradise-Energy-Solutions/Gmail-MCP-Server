@@ -20,7 +20,31 @@ import {createEmailMessage, createEmailWithNodemailer} from "./utl.js";
 import { createLabel, updateLabel, deleteLabel, listLabels, findLabelByName, getOrCreateLabel, GmailLabel } from "./label-manager.js";
 import { createFilter, listFilters, getFilter, deleteFilter, filterTemplates, GmailFilterCriteria, GmailFilterAction } from "./filter-manager.js";
 
+// Security modules
+import {
+    validateSavePath,
+    validateFilename,
+    sanitizeFilename,
+    validateEmail as validateEmailAddress,
+    validateSearchQuery,
+    validateLabelName,
+    validateMessageId,
+    VALIDATION_LIMITS,
+} from "./validators.js";
+import {
+    initializeAuditLogger,
+    getAuditLogger,
+    AuditEventType,
+    LogLevel,
+} from "./audit-logger.js";
+import {
+    sanitizeErrorMessage,
+} from "./credential-security.js";
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Secure file permission mode for credentials
+const SECURE_FILE_MODE = 0o600;
 
 // Configuration paths
 const CONFIG_DIR = path.join(os.homedir(), '.gmail-mcp');
@@ -175,10 +199,11 @@ async function authenticate() {
             try {
                 const { tokens } = await oauth2Client.getToken(code);
                 oauth2Client.setCredentials(tokens);
-                fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(tokens));
+                // Write credentials with secure file permissions (owner read/write only)
+                fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(tokens), { mode: SECURE_FILE_MODE });
 
                 res.writeHead(200);
-                res.end('Authentication successful! You can close this window.');
+                res.end('Authentication successful! You can close this window');
                 server.close();
                 resolve();
             } catch (error) {
@@ -1131,7 +1156,7 @@ async function main() {
                         const buffer = Buffer.from(data, 'base64url');
 
                         // Determine save path and filename
-                        const savePath = validatedArgs.savePath || process.cwd();
+                        const baseSavePath = validatedArgs.savePath || process.cwd();
                         let filename = validatedArgs.filename;
                         
                         if (!filename) {
@@ -1159,13 +1184,26 @@ async function main() {
                             filename = findAttachment(messageResponse.data.payload) || `attachment-${validatedArgs.attachmentId}`;
                         }
 
-                        // Ensure save directory exists
-                        if (!fs.existsSync(savePath)) {
-                            fs.mkdirSync(savePath, { recursive: true });
+                        // SECURITY: Validate and sanitize filename to prevent path traversal
+                        const filenameValidation = validateFilename(filename);
+                        if (!filenameValidation.valid) {
+                            throw new Error(`Invalid filename: ${filenameValidation.error}`);
+                        }
+                        filename = sanitizeFilename(filename);
+
+                        // SECURITY: Validate save path to prevent path traversal attacks
+                        const savePathValidation = validateSavePath(filename, baseSavePath);
+                        if (!savePathValidation.valid) {
+                            throw new Error(`Invalid save path: ${savePathValidation.error}`);
                         }
 
-                        // Write file
-                        const fullPath = path.join(savePath, filename);
+                        // Ensure save directory exists
+                        if (!fs.existsSync(baseSavePath)) {
+                            fs.mkdirSync(baseSavePath, { recursive: true });
+                        }
+
+                        // Write file to validated path
+                        const fullPath = path.join(baseSavePath, filename);
                         fs.writeFileSync(fullPath, buffer);
 
                         return {
