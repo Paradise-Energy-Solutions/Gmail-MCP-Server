@@ -97,7 +97,7 @@ export function getScopesForPreset(preset: ScopePreset): string[] {
  * Validate that requested scopes are known and safe
  */
 export function validateScopes(scopes: string[]): { valid: boolean; unknownScopes: string[] } {
-    const knownScopes = new Set(Object.values(GMAIL_SCOPES));
+    const knownScopes = new Set<string>(Object.values(GMAIL_SCOPES));
     const unknownScopes = scopes.filter(scope => !knownScopes.has(scope));
     return {
         valid: unknownScopes.length === 0,
