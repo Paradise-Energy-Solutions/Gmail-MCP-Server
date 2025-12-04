@@ -25,20 +25,11 @@ import {
     validateSavePath,
     validateFilename,
     sanitizeFilename,
-    validateEmail as validateEmailAddress,
-    validateSearchQuery,
-    validateLabelName,
-    validateMessageId,
-    VALIDATION_LIMITS,
 } from "./validators.js";
 import {
-    initializeAuditLogger,
-    getAuditLogger,
-    AuditEventType,
     LogLevel,
 } from "./audit-logger.js";
 import {
-    sanitizeErrorMessage,
     OAUTH_SCOPES,
     getScopesForPreset,
     ScopePreset,
@@ -151,12 +142,8 @@ async function initializeSecurity(): Promise<void> {
  */
 function getLogLevelFromEnv(): number {
     const level = process.env.GMAIL_MCP_LOG_LEVEL?.toUpperCase();
-    const LogLevel = {
-        ERROR: 0,
-        WARN: 1,
-        INFO: 2,
-        DEBUG: 3,
-    };
+    // Use the imported LogLevel enum which has correct values:
+    // DEBUG=0, INFO=1, WARN=2, ERROR=3, SECURITY=4
     return LogLevel[level as keyof typeof LogLevel] ?? LogLevel.INFO;
 }
 
@@ -283,7 +270,7 @@ async function authenticate() {
                 enforceCredentialPermissions(CREDENTIALS_PATH);
 
                 res.writeHead(200);
-                res.end('Authentication successful! You can close this window');
+                res.end('Authentication successful! You can close this window.');
                 server.close();
                 resolve();
             } catch (error) {
@@ -1275,7 +1262,8 @@ async function main() {
                         filename = sanitizeFilename(filename);
 
                         // SECURITY: Validate save path to prevent path traversal attacks
-                        const savePathValidation = validateSavePath(filename, baseSavePath);
+                        const fullPathToValidate = path.join(baseSavePath, filename);
+                        const savePathValidation = validateSavePath(fullPathToValidate, baseSavePath);
                         if (!savePathValidation.valid) {
                             throw new Error(`Invalid save path: ${savePathValidation.error}`);
                         }
