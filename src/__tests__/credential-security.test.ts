@@ -3,7 +3,7 @@
  * Tests for credential handling and OAuth security in credential-security.ts
  */
 
-import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
+import { describe, it, before, after, afterEach } from 'node:test';
 import assert from 'node:assert';
 import fs from 'fs';
 import path from 'path';
@@ -39,12 +39,6 @@ import {
 let testDir: string;
 let testOAuthKeysPath: string;
 let testCredentialsPath: string;
-
-// Helper to create test files
-function createTestFile(filePath: string, content: object | string, mode?: number): void {
-    const data = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
-    fs.writeFileSync(filePath, data, { mode: mode ?? 0o600 });
-}
 
 // Helper to save and restore env vars
 function withEnvVars(vars: Record<string, string | undefined>, fn: () => void): void {

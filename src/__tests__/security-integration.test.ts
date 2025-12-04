@@ -45,13 +45,6 @@ function createTestSecurityManager(overrides: Partial<SecurityConfig> = {}): Sec
 }
 
 /**
- * Wait for specified milliseconds
- */
-function sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-/**
  * Capture console output
  */
 function captureConsole(): { logs: string[]; errors: string[]; restore: () => void } {
@@ -623,7 +616,6 @@ describe('Handler Wrappers', () => {
         });
 
         it('should extract userId from args', async () => {
-            let capturedUserId: string | undefined;
             const originalHandler = async (args: Record<string, unknown>) => {
                 // The wrapper uses the userId from args for rate limiting
                 return 'done';
@@ -632,9 +624,6 @@ describe('Handler Wrappers', () => {
             const wrappedHandler = wrapHandler(originalHandler);
             await wrappedHandler({ userId: 'test-user-123' });
             
-            // If rate limiting worked, the user should have usage recorded
-            const security = getSecurity();
-            const rateLimiter = security.getRateLimiter();
             // This test verifies the handler executed without error
         });
 
