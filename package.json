@@ -1,7 +1,7 @@
 {
-  "name": "@gongrzhe/server-gmail-autoauth-mcp",
+  "name": "@paradise-energy-solutions/gmail-mcp-server",
   "version": "1.1.11",
-  "description": "Gmail MCP server with auto authentication support",
+  "description": "Gmail MCP server with auto authentication support (PES security-hardened fork)",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -29,16 +29,16 @@
     "claude",
     "auto-auth"
   ],
-  "author": "gongrzhe",
+  "author": "Alex Egbert <aegbert@paradise-energy.com>",
   "license": "ISC",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/gongrzhe/server-gmail-autoauth-mcp.git"
+    "url": "git+https://github.com/Paradise-Energy-Solutions/Gmail-MCP-Server.git"
   },
   "bugs": {
-    "url": "https://github.com/gongrzhe/server-gmail-autoauth-mcp/issues"
+    "url": "https://github.com/Paradise-Energy-Solutions/Gmail-MCP-Server/issues"
   },
-  "homepage": "https://github.com/gongrzhe/server-gmail-autoauth-mcp#readme",
+  "homepage": "https://github.com/Paradise-Energy-Solutions/Gmail-MCP-Server#readme",
   "publishConfig": {
     "access": "public"
   },
