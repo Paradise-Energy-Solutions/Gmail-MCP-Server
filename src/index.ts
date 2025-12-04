@@ -42,6 +42,7 @@ import {
     OAUTH_SCOPES,
     getScopesForPreset,
     ScopePreset,
+    enforceCredentialPermissions,
 } from "./credential-security.js";
 import {
     SecurityManager,
@@ -278,6 +279,8 @@ async function authenticate() {
                 oauth2Client.setCredentials(tokens);
                 // Write credentials with secure file permissions (owner read/write only)
                 fs.writeFileSync(CREDENTIALS_PATH, JSON.stringify(tokens), { mode: SECURE_FILE_MODE });
+                // Enforce file permissions as additional security measure
+                enforceCredentialPermissions(CREDENTIALS_PATH);
 
                 res.writeHead(200);
                 res.end('Authentication successful! You can close this window');
