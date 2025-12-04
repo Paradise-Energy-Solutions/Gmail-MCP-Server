@@ -43,6 +43,10 @@ import {
     getScopesForPreset,
     ScopePreset,
 } from "./credential-security.js";
+import {
+    SecurityManager,
+    SecurityConfig,
+} from "./security.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -113,6 +117,47 @@ interface EmailContent {
 
 // OAuth2 configuration
 let oauth2Client: OAuth2Client;
+
+// Security manager instance
+let securityManager: SecurityManager;
+
+/**
+ * Initialize the security manager with configuration from environment
+ */
+async function initializeSecurity(): Promise<void> {
+    const config: SecurityConfig = {
+        logLevel: getLogLevelFromEnv(),
+        logFormat: 'json',
+        rateLimitPerMinute: parseInt(process.env.GMAIL_MCP_RATE_LIMIT || '250', 10),
+        dailyQuotaLimit: parseInt(process.env.GMAIL_MCP_DAILY_QUOTA || '1000000000', 10),
+        oauthKeysPath: OAUTH_PATH,
+        credentialsPath: CREDENTIALS_PATH,
+        consoleOutput: process.env.GMAIL_MCP_AUDIT_CONSOLE !== 'false',
+        piiHandling: (process.env.GMAIL_MCP_PII_MODE || 'redact') as 'redact' | 'hash' | 'domain_only' | 'omit',
+    };
+
+    // Add file logging if path is specified
+    if (process.env.GMAIL_MCP_AUDIT_LOG_PATH) {
+        config.logFilePath = process.env.GMAIL_MCP_AUDIT_LOG_PATH;
+    }
+
+    securityManager = new SecurityManager(config);
+    await securityManager.initialize();
+}
+
+/**
+ * Get log level from environment variable
+ */
+function getLogLevelFromEnv(): number {
+    const level = process.env.GMAIL_MCP_LOG_LEVEL?.toUpperCase();
+    const LogLevel = {
+        ERROR: 0,
+        WARN: 1,
+        INFO: 2,
+        DEBUG: 3,
+    };
+    return LogLevel[level as keyof typeof LogLevel] ?? LogLevel.INFO;
+}
 
 /**
  * Recursively extract email body content from MIME message parts
@@ -384,6 +429,9 @@ async function main() {
         console.log('Authentication completed successfully');
         process.exit(0);
     }
+
+    // Initialize security manager
+    await initializeSecurity();
 
     // Initialize Gmail API
     const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
@@ -1275,6 +1323,21 @@ async function main() {
 
     const transport = new StdioServerTransport();
     server.connect(transport);
+
+    // Handle graceful shutdown
+    process.on('SIGINT', async () => {
+        if (securityManager) {
+            await securityManager.shutdown();
+        }
+        process.exit(0);
+    });
+
+    process.on('SIGTERM', async () => {
+        if (securityManager) {
+            await securityManager.shutdown();
+        }
+        process.exit(0);
+    });
 }
 
 main().catch((error) => {
