@@ -74,8 +74,28 @@ function getConfiguredScopes(): string[] {
 }
 
 // Configuration paths
-const CONFIG_DIR = path.join(os.homedir(), '.gmail-mcp');
-const OAUTH_PATH = process.env.GMAIL_OAUTH_PATH || path.join(CONFIG_DIR, 'gcp-oauth.keys.json');
+// Ensure proper path handling for cross-platform environments
+const CONFIG_DIR = (() => {
+    if (process.env.GMAIL_CONFIG_DIR) {
+        return process.env.GMAIL_CONFIG_DIR;
+    }
+    const home = os.homedir();
+    // Ensure we're using proper path separators
+    return path.join(home, '.gmail-mcp');
+})();
+
+const OAUTH_PATH = (() => {
+    if (process.env.GMAIL_OAUTH_PATH) {
+        return process.env.GMAIL_OAUTH_PATH;
+    }
+    // Check current working directory first
+    const localPath = path.join(process.cwd(), 'gcp-oauth.keys.json');
+    if (fs.existsSync(localPath)) {
+        return localPath;
+    }
+    return path.join(CONFIG_DIR, 'gcp-oauth.keys.json');
+})();
+
 const CREDENTIALS_PATH = process.env.GMAIL_CREDENTIALS_PATH || path.join(CONFIG_DIR, 'credentials.json');
 
 // Type definitions for Gmail API responses
@@ -771,6 +791,15 @@ async function main() {
 
                 case "search_emails": {
                     const validatedArgs = SearchEmailsSchema.parse(args);
+                    
+                    // Diagnostic logging
+                    const credentials = oauth2Client.credentials;
+                    console.error('[DIAGNOSTIC] search_emails called with:');
+                    console.error('[DIAGNOSTIC]   - Access token exists:', !!credentials.access_token);
+                    console.error('[DIAGNOSTIC]   - Refresh token exists:', !!credentials.refresh_token);
+                    console.error('[DIAGNOSTIC]   - Token expiry:', credentials.expiry_date);
+                    console.error('[DIAGNOSTIC]   - Query:', validatedArgs.query);
+                    
                     const response = await gmail.users.messages.list({
                         userId: 'me',
                         q: validatedArgs.query,
