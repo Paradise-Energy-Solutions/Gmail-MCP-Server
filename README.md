@@ -127,7 +127,7 @@ chmod 600 ~/.gmail-mcp/gcp-oauth.keys.json
 ### Step 3: Build the Server
 
 ```bash
-cd /home/aegbert/gmail-mcp/gmail-mcp-server
+cd /path/to/gmail-mcp-server
 npm install
 npm run build
 ```
@@ -154,9 +154,9 @@ Add the following to your VS Code `mcp.json` (typically at `~/.config/Code/User/
     "gmail": {
       "type": "stdio",
       "command": "node",
-      "args": ["/home/aegbert/gmail-mcp/gmail-mcp-server/dist/index.js"],
+      "args": ["/home/USERNAME/gmail-mcp-server/dist/index.js"],
       "env": {
-        "GMAIL_OAUTH_PATH": "/home/aegbert/.gmail-mcp/gcp-oauth.keys.json"
+        "GMAIL_OAUTH_PATH": "/home/USERNAME/.gmail-mcp/gcp-oauth.keys.json"
       }
     }
   }
@@ -175,9 +175,9 @@ When running VS Code in WSL mode from Windows, path handling requires special at
     "gmail": {
       "type": "stdio",
       "command": "node",
-      "args": ["//wsl.localhost/Ubuntu/home/aegbert/gmail-mcp/gmail-mcp-server/dist/index.js"],
+      "args": ["//wsl.localhost/Ubuntu/home/USERNAME/gmail-mcp-server/dist/index.js"],
       "env": {
-        "GMAIL_OAUTH_PATH": "//wsl.localhost/Ubuntu/home/aegbert/.gmail-mcp/gcp-oauth.keys.json"
+        "GMAIL_OAUTH_PATH": "//wsl.localhost/Ubuntu/home/USERNAME/.gmail-mcp/gcp-oauth.keys.json"
       }
     }
   }
