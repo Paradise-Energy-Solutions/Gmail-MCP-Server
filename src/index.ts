@@ -23,8 +23,10 @@ import { createFilter, listFilters, getFilter, deleteFilter, filterTemplates, Gm
 // Security modules
 import {
     validateSavePath,
+    validateReadPath,
     validateFilename,
     sanitizeFilename,
+    VALIDATION_LIMITS,
 } from "./validators.js";
 import {
     LogLevel,
@@ -97,6 +99,16 @@ const OAUTH_PATH = (() => {
 })();
 
 const CREDENTIALS_PATH = process.env.GMAIL_CREDENTIALS_PATH || path.join(CONFIG_DIR, 'credentials.json');
+
+/**
+ * Root directory that constrains all file reads performed by this server
+ * (htmlBodyFile, inline_images, attachments). Every path supplied by a caller
+ * must resolve to a file that lives inside this directory.
+ *
+ * Override with the GMAIL_MCP_ALLOWED_READ_PATH environment variable.
+ * Defaults to the process working directory when the variable is not set.
+ */
+const ALLOWED_READ_PATH = process.env.GMAIL_MCP_ALLOWED_READ_PATH || process.cwd();
 
 // Type definitions for Gmail API responses
 interface GmailMessagePart {
@@ -303,18 +315,102 @@ async function authenticate() {
 }
 
 // Schema definitions
-const SendEmailSchema = z.object({
-    to: z.array(z.string()).describe("List of recipient email addresses"),
-    subject: z.string().describe("Email subject"),
-    body: z.string().describe("Email body content (used for text/plain or when htmlBody not provided)"),
-    htmlBody: z.string().optional().describe("HTML version of the email body"),
-    mimeType: z.enum(['text/plain', 'text/html', 'multipart/alternative']).optional().default('text/plain').describe("Email content type"),
-    cc: z.array(z.string()).optional().describe("List of CC recipients"),
-    bcc: z.array(z.string()).optional().describe("List of BCC recipients"),
-    threadId: z.string().optional().describe("Thread ID to reply to"),
-    inReplyTo: z.string().optional().describe("Message ID being replied to"),
-    attachments: z.array(z.string()).optional().describe("List of file paths to attach to the email"),
+
+/**
+ * Describes one inline (CID-referenced) image to embed in the HTML body.
+ * The image is transported as a multipart/related MIME part rather than
+ * as a base64 data URI, which prevents agent context-window overflow.
+ *
+ * Usage in htmlBody: <img src="cid:logo" />
+ * Corresponding entry: { content_id: "logo", mime_type: "image/png", source: "file:///path/to/logo.png" }
+ */
+const InlineImageSchema = z.object({
+    content_id: z
+        .string()
+        .regex(
+            /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/,
+            'content_id must start with a letter or digit and contain only letters, digits, underscores, hyphens, or dots'
+        )
+        .max(255, 'content_id must not exceed 255 characters')
+        .describe(
+            'Unique identifier referenced in htmlBody as <img src="cid:<content_id>">. ' +
+            'Example: "logo" for <img src="cid:logo">'
+        ),
+    mime_type: z
+        .string()
+        .regex(
+            /^[a-zA-Z0-9][a-zA-Z0-9!#$&\-^.]*\/[a-zA-Z0-9][a-zA-Z0-9!#$&\-^.+]*$/,
+            'mime_type must be a valid media type such as image/png or image/jpeg'
+        )
+        .max(100, 'mime_type must not exceed 100 characters')
+        .describe('MIME type of the image. Examples: "image/png", "image/jpeg", "image/gif"'),
+    source: z
+        .string()
+        .startsWith('file://', 'source must be a file:// URI. Example: "file:///home/user/images/logo.png"')
+        .describe(
+            'file:// URI pointing to the image on the server filesystem. ' +
+            'The file must reside inside GMAIL_MCP_ALLOWED_READ_PATH. ' +
+            'Example: "file:///home/user/images/logo.png"'
+        ),
 });
+
+const SendEmailSchema = z
+    .object({
+        to: z.array(z.string()).describe("List of recipient email addresses"),
+        subject: z.string().describe("Email subject"),
+        body: z.string().describe("Email body content (used for text/plain or when htmlBody not provided)"),
+        htmlBody: z
+            .string()
+            .optional()
+            .describe(
+                'HTML version of the email body. ' +
+                'Mutually exclusive with htmlBodyFile — provide one or the other, not both. ' +
+                'Use inline_images to embed images by CID reference instead of base64 data URIs.'
+            ),
+        htmlBodyFile: z
+            .string()
+            .optional()
+            .describe(
+                'Absolute path to an HTML file whose contents become the HTML body. ' +
+                'Use this instead of htmlBody when the HTML is large (e.g. contains embedded images) ' +
+                'to avoid exceeding the agent context window. ' +
+                'The file must reside inside GMAIL_MCP_ALLOWED_READ_PATH. ' +
+                'The server automatically uses multipart/alternative so the HTML is rendered — ' +
+                'no need to set mimeType separately when using htmlBodyFile. ' +
+                'Mutually exclusive with htmlBody — provide one or the other, not both. ' +
+                'Example: "/home/user/templates/announcement.html"'
+            ),
+        mimeType: z.enum(['text/plain', 'text/html', 'multipart/alternative']).optional().default('text/plain').describe("Email content type"),
+        cc: z.array(z.string()).optional().describe("List of CC recipients"),
+        bcc: z.array(z.string()).optional().describe("List of BCC recipients"),
+        threadId: z.string().optional().describe("Thread ID to reply to"),
+        inReplyTo: z.string().optional().describe("Message ID being replied to"),
+        attachments: z
+            .array(z.string())
+            .optional()
+            .describe(
+                'List of absolute file paths to attach to the email. ' +
+                'Each file must reside inside GMAIL_MCP_ALLOWED_READ_PATH. ' +
+                'Example: ["/home/user/docs/report.pdf"]'
+            ),
+        inline_images: z
+            .array(InlineImageSchema)
+            .optional()
+            .describe(
+                'Inline images to embed as CID (Content-ID) parts in a multipart/related message. ' +
+                'Each image is referenced in htmlBody as <img src="cid:<content_id>">. ' +
+                'This approach keeps image data out of the agent context window. ' +
+                'Requires htmlBody or htmlBodyFile to contain matching cid: references.'
+            ),
+    })
+    .refine(
+        (data) => !(data.htmlBody && data.htmlBodyFile),
+        {
+            message: 'Provide either htmlBody or htmlBodyFile, not both. ' +
+                     'Use htmlBodyFile when the HTML content is large to avoid agent context-window overflow.',
+            path: ['htmlBody'],
+        }
+    );
 
 const ReadEmailSchema = z.object({
     messageId: z.string().describe("ID of the email message to retrieve"),
@@ -565,11 +661,76 @@ async function main() {
 
         async function handleEmailAction(action: "send" | "draft", validatedArgs: any) {
             let message: string;
+
+            // ── File-read security & resolution ──────────────────────────────
+            // All three file-sourced inputs (htmlBodyFile, inline_images, attachments)
+            // are validated against ALLOWED_READ_PATH before any fs.readFileSync call.
+
+            // 1. htmlBodyFile → resolve into validatedArgs.htmlBody
+            if (validatedArgs.htmlBodyFile) {
+                const readResult = validateReadPath(validatedArgs.htmlBodyFile, ALLOWED_READ_PATH);
+                if (!readResult.valid) {
+                    throw new Error(
+                        `htmlBodyFile validation failed: ${readResult.error}. ` +
+                        `Ensure the file is inside GMAIL_MCP_ALLOWED_READ_PATH ('${ALLOWED_READ_PATH}').`
+                    );
+                }
+                const resolvedHtmlFile = readResult.sanitized!;
+                const fileStat = fs.statSync(resolvedHtmlFile);
+                if (fileStat.size > VALIDATION_LIMITS.MAX_EMAIL_BODY_LENGTH) {
+                    throw new Error(
+                        `htmlBodyFile exceeds the maximum allowed size of ` +
+                        `${Math.round(VALIDATION_LIMITS.MAX_EMAIL_BODY_LENGTH / (1024 * 1024))} MB ` +
+                        `(file is ${Math.round(fileStat.size / 1024)} KB).`
+                    );
+                }
+                validatedArgs.htmlBody = fs.readFileSync(resolvedHtmlFile, 'utf-8');
+                // Ensure the HTML is rendered: if mimeType is still 'text/plain' (the schema default),
+                // promote it so createEmailMessage uses the HTML body.
+                if (!validatedArgs.mimeType || validatedArgs.mimeType === 'text/plain') {
+                    validatedArgs.mimeType = 'multipart/alternative';
+                }
+            }
+
+            // 2. inline_images → strip file:// and resolve each source path
+            if (validatedArgs.inline_images && validatedArgs.inline_images.length > 0) {
+                for (const image of validatedArgs.inline_images) {
+                    const readResult = validateReadPath(image.source, ALLOWED_READ_PATH);
+                    if (!readResult.valid) {
+                        throw new Error(
+                            `inline_images validation failed for content_id '${image.content_id}': ${readResult.error}. ` +
+                            `Ensure the file is inside GMAIL_MCP_ALLOWED_READ_PATH ('${ALLOWED_READ_PATH}').`
+                        );
+                    }
+                    // Replace the file:// URI with the resolved absolute path for nodemailer
+                    image.source = readResult.sanitized!;
+                }
+            }
+
+            // 3. attachments → resolve and validate each path (security hardening)
+            if (validatedArgs.attachments && validatedArgs.attachments.length > 0) {
+                for (let i = 0; i < validatedArgs.attachments.length; i++) {
+                    const readResult = validateReadPath(validatedArgs.attachments[i], ALLOWED_READ_PATH);
+                    if (!readResult.valid) {
+                        throw new Error(
+                            `attachments[${i}] validation failed: ${readResult.error}. ` +
+                            `Ensure the file is inside GMAIL_MCP_ALLOWED_READ_PATH ('${ALLOWED_READ_PATH}').`
+                        );
+                    }
+                    validatedArgs.attachments[i] = readResult.sanitized!;
+                }
+            }
+            // ─────────────────────────────────────────────────────────────────
             
             try {
                 // Check if we have attachments
-                if (validatedArgs.attachments && validatedArgs.attachments.length > 0) {
-                    // Use Nodemailer to create properly formatted RFC822 message
+                const needsNodemailer =
+                    (validatedArgs.attachments && validatedArgs.attachments.length > 0) ||
+                    (validatedArgs.inline_images && validatedArgs.inline_images.length > 0);
+
+                if (needsNodemailer) {
+                    // Use Nodemailer to create a properly formatted RFC822 message.
+                    // This path handles file attachments and/or inline CID images.
                     message = await createEmailWithNodemailer(validatedArgs);
                     
                     if (action === "send") {
@@ -676,10 +837,6 @@ async function main() {
                     }
                 }
             } catch (error: any) {
-                // Log attachment-related errors for debugging
-                if (validatedArgs.attachments && validatedArgs.attachments.length > 0) {
-                    console.error(`Failed to send email with ${validatedArgs.attachments.length} attachments:`, error.message);
-                }
                 throw error;
             }
         }

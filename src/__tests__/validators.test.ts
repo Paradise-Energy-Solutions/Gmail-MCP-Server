@@ -12,6 +12,7 @@ import {
     isPathContained,
     validatePath,
     validateSavePath,
+    validateReadPath,
     validateFilename,
     sanitizeFilename,
     validateSearchQuery,
@@ -294,6 +295,64 @@ describe('Path Validation', () => {
             const result = validateSavePath('subdir/file.txt', '/home/user');
             assert.strictEqual(result.valid, true);
             assert.ok(result.sanitized?.startsWith('/home/user'));
+        });
+    });
+
+    describe('validateReadPath', () => {
+        it('should accept a path within the allowed directory', () => {
+            const result = validateReadPath('docs/report.html', '/home/user');
+            assert.strictEqual(result.valid, true);
+            assert.ok(result.sanitized?.startsWith('/home/user'));
+        });
+
+        it('should strip the file:// URI prefix and still validate correctly', () => {
+            const result = validateReadPath('file:///home/user/docs/logo.png', '/home/user');
+            assert.strictEqual(result.valid, true);
+            // Sanitized path should not contain the file:// prefix
+            assert.ok(result.sanitized && !result.sanitized.startsWith('file://'));
+        });
+
+        it('should return the resolved absolute path in sanitized', () => {
+            const result = validateReadPath('templates/email.html', '/home/user');
+            assert.strictEqual(result.valid, true);
+            assert.strictEqual(result.sanitized, '/home/user/templates/email.html');
+        });
+
+        it('should reject a path traversal attempt (../../)', () => {
+            const result = validateReadPath('../../etc/passwd', '/home/user/allowed');
+            assert.strictEqual(result.valid, false);
+            assert.ok(result.error, 'Should provide an error message');
+        });
+
+        it('should reject a file:// URI that traverses outside the allowed dir', () => {
+            const result = validateReadPath('file:///etc/shadow', '/home/user/allowed');
+            assert.strictEqual(result.valid, false);
+        });
+
+        it('should reject a path with null bytes', () => {
+            const result = validateReadPath('docs/file\0.html', '/home/user');
+            assert.strictEqual(result.valid, false);
+            assert.ok(result.error?.includes('null'));
+        });
+
+        it('should reject an empty path', () => {
+            const result = validateReadPath('', '/home/user');
+            assert.strictEqual(result.valid, false);
+        });
+
+        it('should reject an absolute path outside the allowed directory', () => {
+            const result = validateReadPath('/var/secret/token.json', '/home/user');
+            assert.strictEqual(result.valid, false);
+        });
+
+        it('error message should mention the allowed directory for actionable feedback', () => {
+            const allowedBase = '/home/user/attachments';
+            const result = validateReadPath('/etc/passwd', allowedBase);
+            assert.strictEqual(result.valid, false);
+            assert.ok(
+                result.error?.includes(allowedBase),
+                `Expected error to mention '${allowedBase}', got: ${result.error}`
+            );
         });
     });
 });

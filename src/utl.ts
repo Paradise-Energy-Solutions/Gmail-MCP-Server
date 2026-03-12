@@ -112,18 +112,30 @@ export async function createEmailWithNodemailer(validatedArgs: any): Promise<str
         buffer: true
     });
 
-    // Prepare attachments for nodemailer
-    const attachments = [];
-    for (const filePath of validatedArgs.attachments) {
+    // Prepare file attachments for nodemailer
+    const attachments: Array<{filename: string; path: string; cid?: string; contentType?: string}> = [];
+    for (const filePath of (validatedArgs.attachments ?? [])) {
         if (!fs.existsSync(filePath)) {
-            throw new Error(`File does not exist: ${filePath}`);
+            throw new Error(`Attachment file does not exist: ${filePath}`);
         }
-        
-        const fileName = path.basename(filePath);
-        
         attachments.push({
-            filename: fileName,
-            path: filePath
+            filename: path.basename(filePath),
+            path: filePath,
+        });
+    }
+
+    // Prepare inline (CID) images. Nodemailer builds multipart/related automatically
+    // when an attachment entry carries a `cid` field. The source paths have already
+    // been validated and resolved by handleEmailAction before reaching this function.
+    for (const image of (validatedArgs.inline_images ?? [])) {
+        if (!fs.existsSync(image.source)) {
+            throw new Error(`Inline image file does not exist: ${image.source} (content_id: '${image.content_id}')`);
+        }
+        attachments.push({
+            filename: path.basename(image.source),
+            path: image.source,
+            cid: image.content_id,
+            contentType: image.mime_type,
         });
     }
 
