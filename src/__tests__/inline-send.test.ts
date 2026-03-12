@@ -5,64 +5,13 @@
  *   - htmlBodyFile: mutually exclusive with htmlBody
  *   - inline_images: InlineImageSchema field-level constraints
  *
- * Does NOT test live Gmail API calls. Import the schemas directly by
- * re-exporting them from a test-helper; here we replicate the Zod shapes
- * to keep tests fast and self-contained.
+ * Imports the real schemas from src/schemas.ts so the tests automatically
+ * exercise the production contract and stay in sync with any schema changes.
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { z } from 'zod';
-
-// ---------------------------------------------------------------------------
-// Replicate the exact Zod schemas from index.ts so tests remain in-process
-// and do not require the full server bootstrap (OAuth, file system, etc.).
-// If the schemas in index.ts change, update these accordingly.
-// ---------------------------------------------------------------------------
-
-const InlineImageSchema = z.object({
-    content_id: z
-        .string()
-        .regex(
-            /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/,
-            'content_id must start with a letter or digit and contain only letters, digits, underscores, hyphens, or dots'
-        )
-        .max(255),
-    mime_type: z
-        .string()
-        .regex(
-            /^[a-zA-Z0-9][a-zA-Z0-9!#$&\-^.]*\/[a-zA-Z0-9][a-zA-Z0-9!#$&\-^.+]*$/,
-            'mime_type must be a valid media type such as image/png or image/jpeg'
-        )
-        .max(100),
-    source: z
-        .string()
-        .startsWith('file://', 'source must be a file:// URI'),
-});
-
-const SendEmailSchema = z
-    .object({
-        to: z.array(z.string()),
-        subject: z.string(),
-        body: z.string(),
-        htmlBody: z.string().optional(),
-        htmlBodyFile: z.string().optional(),
-        mimeType: z.enum(['text/plain', 'text/html', 'multipart/alternative']).optional().default('text/plain'),
-        cc: z.array(z.string()).optional(),
-        bcc: z.array(z.string()).optional(),
-        threadId: z.string().optional(),
-        inReplyTo: z.string().optional(),
-        attachments: z.array(z.string()).optional(),
-        inline_images: z.array(InlineImageSchema).optional(),
-    })
-    .refine(
-        (data) => !(data.htmlBody && data.htmlBodyFile),
-        {
-            message: 'Provide either htmlBody or htmlBodyFile, not both. ' +
-                     'Use htmlBodyFile when the HTML content is large to avoid agent context-window overflow.',
-            path: ['htmlBody'],
-        }
-    );
+import { InlineImageSchema, SendEmailSchema } from '../schemas.js';
 
 // ---------------------------------------------------------------------------
 // Minimal valid base payload — reused across tests
@@ -233,17 +182,26 @@ describe('InlineImageSchema field validation', () => {
             assert.strictEqual(result.success, true);
         });
 
-        it('should REJECT a plain path without the file:// prefix', () => {
+        it('should accept an absolute filesystem path (without file:// prefix)', () => {
             const result = InlineImageSchema.safeParse({
                 content_id: 'logo',
                 mime_type: 'image/png',
                 source: '/home/user/images/logo.png',
             });
+            assert.strictEqual(result.success, true);
+        });
+
+        it('should REJECT a non-absolute relative path', () => {
+            const result = InlineImageSchema.safeParse({
+                content_id: 'logo',
+                mime_type: 'image/png',
+                source: 'images/logo.png',
+            });
             assert.strictEqual(result.success, false);
             const message = result.error?.issues[0]?.message ?? '';
             assert.ok(
-                message.includes('file://'),
-                `Error message should mention file:// URI; got: "${message}"`
+                message.includes('file://') || message.includes('absolute'),
+                `Error message should mention file:// URI or absolute path; got: "${message}"`
             );
         });
 
@@ -323,7 +281,7 @@ describe('SendEmailSchema with inline_images', () => {
         assert.strictEqual(result.data?.mimeType, 'text/plain');
     });
 
-    it('should REJECT inline_images with an invalid entry', () => {
+    it('should REJECT inline_images with a relative source path', () => {
         const result = SendEmailSchema.safeParse({
             ...BASE_PAYLOAD,
             htmlBody: '<img src="cid:logo">',
@@ -331,10 +289,29 @@ describe('SendEmailSchema with inline_images', () => {
                 {
                     content_id: 'logo',
                     mime_type: 'image/png',
-                    source: '/not/a/file/uri.png', // missing file://
+                    source: 'relative/path.png', // not absolute, not file://
                 },
             ],
         });
         assert.strictEqual(result.success, false);
+    });
+
+    it('should REJECT inline_images when neither htmlBody nor htmlBodyFile is provided', () => {
+        const result = SendEmailSchema.safeParse({
+            ...BASE_PAYLOAD,
+            inline_images: [
+                {
+                    content_id: 'logo',
+                    mime_type: 'image/png',
+                    source: 'file:///home/user/logo.png',
+                },
+            ],
+        });
+        assert.strictEqual(result.success, false);
+        const message = result.error?.issues[0]?.message ?? '';
+        assert.ok(
+            message.includes('htmlBody') || message.includes('htmlBodyFile'),
+            `Error message should require an HTML body source; got: "${message}"`
+        );
     });
 });
