@@ -3,7 +3,9 @@
  * Provides comprehensive validation for security-critical inputs
  */
 
+import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
 // ==================== Configuration Constants ====================
 
@@ -211,8 +213,18 @@ export function validateReadPath(filePath: string, allowedBase: string): Validat
         return { valid: false, error: 'File path is required' };
     }
 
-    // Strip file:// URI prefix if present
-    const rawPath = filePath.startsWith('file://') ? filePath.slice('file://'.length) : filePath;
+    // Normalise file:// URIs using the standard URL parser so percent-encoded
+    // characters (e.g. spaces as %20) are decoded correctly across platforms.
+    let rawPath: string;
+    if (filePath.startsWith('file://')) {
+        try {
+            rawPath = fileURLToPath(filePath);
+        } catch {
+            return { valid: false, error: `Invalid file:// URI: '${filePath}'` };
+        }
+    } else {
+        rawPath = filePath;
+    }
 
     const pathResult = validatePath(rawPath, allowedBase);
     if (!pathResult.valid) {
@@ -225,7 +237,15 @@ export function validateReadPath(filePath: string, allowedBase: string): Validat
 
     const resolvedPath = path.resolve(allowedBase, rawPath);
 
-    if (!isPathContained(allowedBase, resolvedPath)) {
+    // Resolve symlinks on both sides before the containment check to prevent
+    // symlink-escape attacks where a path inside allowedBase links to a
+    // location outside it. Falls back to the lexical check on ENOENT.
+    let realAllowedBase = allowedBase;
+    let realResolvedPath = resolvedPath;
+    try { realAllowedBase = fs.realpathSync(allowedBase); } catch { /* ENOENT fallback */ }
+    try { realResolvedPath = fs.realpathSync(resolvedPath); } catch { /* ENOENT fallback */ }
+
+    if (!isPathContained(realAllowedBase, realResolvedPath)) {
         return {
             valid: false,
             error: `File path '${rawPath}' resolves outside the allowed directory '${allowedBase}'. ` +

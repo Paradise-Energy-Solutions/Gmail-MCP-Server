@@ -249,10 +249,12 @@ describe(
         });
 
         after(async () => {
-            // Draft deletion intentionally skipped so drafts are visible in Gmail.
-            // Restore cleanup by replacing this block with the original after() body.
+            // Delete every draft created in this run
+            for (const id of createdDraftIds) {
+                await deleteDraftSafely(gmail, id);
+            }
 
-            // Remove fixture files only
+            // Remove fixture files
             if (tempDir) {
                 fs.rmSync(tempDir, { recursive: true, force: true });
             }
