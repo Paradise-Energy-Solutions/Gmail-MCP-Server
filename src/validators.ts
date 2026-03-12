@@ -196,6 +196,46 @@ export function validateSavePath(savePath: string, baseDir: string): ValidationR
     return { valid: true, sanitized: resolvedPath };
 }
 
+/**
+ * Validates a file path for safe reading operations.
+ * Strips a leading `file://` prefix before resolving, reuses the same
+ * containment logic as validateSavePath so both read and write paths are
+ * protected by a single implementation.
+ *
+ * @param filePath  - The raw path or `file://` URI supplied by the caller.
+ * @param allowedBase - The root directory all reads must stay within.
+ * @returns ValidationResult with `sanitized` set to the resolved absolute path on success.
+ */
+export function validateReadPath(filePath: string, allowedBase: string): ValidationResult {
+    if (!filePath || typeof filePath !== 'string') {
+        return { valid: false, error: 'File path is required' };
+    }
+
+    // Strip file:// URI prefix if present
+    const rawPath = filePath.startsWith('file://') ? filePath.slice('file://'.length) : filePath;
+
+    const pathResult = validatePath(rawPath, allowedBase);
+    if (!pathResult.valid) {
+        return {
+            valid: false,
+            error: `${pathResult.error} — allowed base directory is '${allowedBase}'. ` +
+                   `Set GMAIL_MCP_ALLOWED_READ_PATH to a directory that contains the target file.`,
+        };
+    }
+
+    const resolvedPath = path.resolve(allowedBase, rawPath);
+
+    if (!isPathContained(allowedBase, resolvedPath)) {
+        return {
+            valid: false,
+            error: `File path '${rawPath}' resolves outside the allowed directory '${allowedBase}'. ` +
+                   `Set GMAIL_MCP_ALLOWED_READ_PATH to a directory that contains the target file.`,
+        };
+    }
+
+    return { valid: true, sanitized: resolvedPath };
+}
+
 // ==================== Filename Validation ====================
 
 /**
@@ -651,6 +691,7 @@ export const validators = {
     isPathContained,
     validatePath,
     validateSavePath,
+    validateReadPath,
     
     // Filename
     validateFilename,

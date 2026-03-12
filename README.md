@@ -194,6 +194,7 @@ When running VS Code in WSL mode from Windows, path handling requires special at
 | `GMAIL_CREDENTIALS_PATH` | Path to stored credentials | `~/.gmail-mcp/credentials.json` |
 | `GMAIL_CONFIG_DIR` | Configuration directory | `~/.gmail-mcp` |
 | `GMAIL_MCP_SCOPE_LEVEL` | OAuth scope level | `FULL` |
+| `GMAIL_MCP_ALLOWED_READ_PATH` | Root directory for all server-side file reads (attachments, inline images, HTML body files). Every file path passed to `send_email` or `draft_email` must resolve within this directory. | `process.cwd()` |
 
 ---
 
@@ -203,8 +204,8 @@ When running VS Code in WSL mode from Windows, path handling requires special at
 
 | Tool | Description |
 |------|-------------|
-| `send_email` | Send a new email (supports attachments) |
-| `draft_email` | Create a draft email |
+| `send_email` | Send a new email (supports file attachments and inline images) |
+| `draft_email` | Create a draft email (supports file attachments and inline images) |
 | `read_email` | Read an email by ID |
 | `search_emails` | Search emails using Gmail syntax |
 | `modify_email` | Add/remove labels from an email |
@@ -237,6 +238,59 @@ When running VS Code in WSL mode from Windows, path handling requires special at
 | `list_filters` | List all filters |
 | `get_filter` | Get filter details |
 | `delete_filter` | Delete a filter |
+
+---
+
+## Rich HTML Emails: Inline Images and File-based HTML Body
+
+For corporate emails that include logo images or large HTML templates, the `send_email` and `draft_email` tools provide two mechanisms that prevent agent context-window overflow.
+
+### Option A — Load the HTML body from a file (`htmlBodyFile`)
+
+Instead of passing the entire HTML string as `htmlBody`, provide the path to the file. The server reads the file and uses its content as the HTML body:
+
+```json
+{
+  "to": ["team@example.com"],
+  "subject": "Q1 Announcement",
+  "body": "Please view this email in an HTML-capable client.",
+  "htmlBodyFile": "/home/user/templates/announcement.html"
+}
+```
+
+> `htmlBody` and `htmlBodyFile` are **mutually exclusive** — provide one or the other, not both.
+> The server automatically uses `multipart/alternative` rendering when `htmlBodyFile` is supplied, so you do not need to set `mimeType`.
+
+### Option B — Embed inline images by CID reference (`inline_images`)
+
+Images referenced as `cid:` in the HTML body are transported as `multipart/related` MIME parts, so their base64 data never passes through the agent:
+
+```json
+{
+  "to": ["team@example.com"],
+  "subject": "Q1 Announcement",
+  "body": "Please view this email in an HTML-capable client.",
+  "htmlBodyFile": "/home/user/templates/announcement.html",
+  "inline_images": [
+    {
+      "content_id": "logo",
+      "mime_type": "image/png",
+      "source": "file:///home/user/images/pse-logo.png"
+    },
+    {
+      "content_id": "banner",
+      "mime_type": "image/jpeg",
+      "source": "file:///home/user/images/q1-banner.jpg"
+    }
+  ]
+}
+```
+
+In the HTML template, reference images with `<img src="cid:logo">` and `<img src="cid:banner">`.
+
+### File access security
+
+All file paths (for `htmlBodyFile`, `inline_images[].source`, and `attachments`) must reside inside the directory specified by `GMAIL_MCP_ALLOWED_READ_PATH` (defaults to `process.cwd()`). Paths that resolve outside this directory are rejected with a descriptive error before the file is read.
 
 ---
 
@@ -310,6 +364,17 @@ chmod 600 ~/.gmail-mcp/*.json
 - **Permission Errors**: Ensure read access to attachment files
 - **Size Limits**: Gmail has a 25MB attachment limit per email
 - **Download Failures**: Verify write permissions to download directory
+
+### File-Read Path Validation Errors
+
+All file paths supplied to `send_email` or `draft_email` (for `attachments`, `htmlBodyFile`, and `inline_images`) must resolve within the directory set by `GMAIL_MCP_ALLOWED_READ_PATH`.
+
+**Error**: `... resolves outside the allowed directory '...'`
+
+**Solutions**:
+1. Set `GMAIL_MCP_ALLOWED_READ_PATH` to a directory that contains all files the server needs to read, e.g. `GMAIL_MCP_ALLOWED_READ_PATH=/home/user/email-assets`
+2. Move the target files inside the already-configured allowed directory
+3. Use `file://` URI format for `inline_images[].source`, e.g. `file:///home/user/logo.png`
 
 ---
 
