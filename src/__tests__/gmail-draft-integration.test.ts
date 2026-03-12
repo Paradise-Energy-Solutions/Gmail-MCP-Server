@@ -21,7 +21,7 @@
  *   • GMAIL_CREDENTIALS_PATH  (default: ~/.gmail-mcp/credentials.json)
  *   • GMAIL_OAUTH_PATH        (default: ~/.gmail-mcp/gcp-oauth.keys.json)
  *
- * Account under test: aegbert@paradiseenergysolutions.com
+ * Account under test: set via GMAIL_INTEGRATION_ACCOUNT env var
  */
 
 import { describe, it, before, after } from 'node:test';
@@ -29,13 +29,14 @@ import assert from 'node:assert/strict';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import zlib from 'zlib';
 import { google, gmail_v1 } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 import { createEmailWithNodemailer } from '../utl.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const ACCOUNT = 'aegbert@paradiseenergysolutions.com';
+const ACCOUNT = process.env.GMAIL_INTEGRATION_ACCOUNT ?? '';
 const CONFIG_DIR = path.join(os.homedir(), '.gmail-mcp');
 const CREDENTIALS_PATH =
     process.env.GMAIL_CREDENTIALS_PATH ?? path.join(CONFIG_DIR, 'credentials.json');
@@ -47,6 +48,9 @@ const OAUTH_PATH =
 function resolveSkipReason(): string | false {
     if (process.env.GMAIL_INTEGRATION !== '1') {
         return 'Set GMAIL_INTEGRATION=1 to run live Gmail API integration tests';
+    }
+    if (!ACCOUNT) {
+        return 'Set GMAIL_INTEGRATION_ACCOUNT=<your-gmail-address> to run live Gmail API integration tests';
     }
     if (!fs.existsSync(CREDENTIALS_PATH)) {
         return `OAuth credentials not found at: ${CREDENTIALS_PATH}`;
@@ -62,17 +66,75 @@ const SKIP_REASON = resolveSkipReason();
 // ── Fixture data ──────────────────────────────────────────────────────────────
 
 /**
- * Minimal 1×1 transparent PNG (valid per the PNG spec; useful as the smallest
- * possible image fixture without depending on an external file at rest).
+ * Generate a solid-color PNG from scratch using only Node.js built-ins.
+ * The result is a valid RGB PNG of the requested dimensions, clearly visible
+ * when rendered by a mail client.
  */
-const TINY_TRANSPARENT_PNG_B64 =
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+function createSolidColorPng(width: number, height: number, r: number, g: number, b: number): Buffer {
+    // CRC-32 implementation (required by the PNG spec for every chunk)
+    const crcTable: number[] = [];
+    for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = (c & 1) ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+        crcTable[n] = c;
+    }
+    function crc32(buf: Buffer): number {
+        let crc = 0xffffffff;
+        for (const byte of buf) crc = (crc >>> 8) ^ crcTable[(crc ^ byte) & 0xff];
+        return (crc ^ 0xffffffff) >>> 0;
+    }
+
+    function chunk(type: string, data: Buffer): Buffer {
+        const typeBytes = Buffer.from(type, 'ascii');
+        const len = Buffer.alloc(4);
+        len.writeUInt32BE(data.length);
+        const crcBuf = Buffer.alloc(4);
+        crcBuf.writeUInt32BE(crc32(Buffer.concat([typeBytes, data])));
+        return Buffer.concat([len, typeBytes, data, crcBuf]);
+    }
+
+    // Build raw scanlines: filter byte 0x00 (None) followed by RGB pixels
+    const scanlines = Buffer.alloc(height * (1 + width * 3));
+    for (let y = 0; y < height; y++) {
+        const row = y * (1 + width * 3);
+        scanlines[row] = 0; // filter: None
+        for (let x = 0; x < width; x++) {
+            scanlines[row + 1 + x * 3]     = r;
+            scanlines[row + 1 + x * 3 + 1] = g;
+            scanlines[row + 1 + x * 3 + 2] = b;
+        }
+    }
+
+    const ihdrData = Buffer.alloc(13);
+    ihdrData.writeUInt32BE(width,  0);
+    ihdrData.writeUInt32BE(height, 4);
+    ihdrData[8]  = 8; // bit depth
+    ihdrData[9]  = 2; // color type: RGB
+    ihdrData[10] = 0; // compression method
+    ihdrData[11] = 0; // filter method
+    ihdrData[12] = 0; // interlace method
+
+    return Buffer.concat([
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), // PNG signature
+        chunk('IHDR', ihdrData),
+        chunk('IDAT', zlib.deflateSync(scanlines)),
+        chunk('IEND', Buffer.alloc(0)),
+    ]);
+}
+
+/**
+ * 64×64 solid red PNG — clearly visible in any mail client.
+ * Generated at runtime; no binary file committed to the repository.
+ */
+const SAMPLE_PNG = createSolidColorPng(64, 64, 220, 50, 50);
 
 const HTML_BODY_WITH_CID = `<!DOCTYPE html>
 <html>
 <body>
-  <p>Integration test email — inline image below (safe to delete):</p>
-  <img src="cid:test-logo" alt="Logo" width="1" height="1" />
+  <p>Integration test email — inline CID image below (safe to delete):</p>
+  <p><img src="cid:test-logo" alt="Red square" width="64" height="64"
+       style="display:block;border:2px solid #333" /></p>
+  <p>If the image renders as a solid red square, inline CID embedding is working correctly.</p>
 </body>
 </html>`;
 
@@ -177,7 +239,7 @@ describe(
             tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gmail-draft-integration-'));
 
             pngPath = path.join(tempDir, 'test-logo.png');
-            fs.writeFileSync(pngPath, Buffer.from(TINY_TRANSPARENT_PNG_B64, 'base64'));
+            fs.writeFileSync(pngPath, SAMPLE_PNG);
 
             attachmentPath = path.join(tempDir, 'test-attachment.txt');
             fs.writeFileSync(attachmentPath, TEXT_ATTACHMENT_CONTENT, 'utf8');
@@ -187,12 +249,10 @@ describe(
         });
 
         after(async () => {
-            // Delete every draft created in this run
-            for (const id of createdDraftIds) {
-                await deleteDraftSafely(gmail, id);
-            }
+            // Draft deletion intentionally skipped so drafts are visible in Gmail.
+            // Restore cleanup by replacing this block with the original after() body.
 
-            // Remove fixture files
+            // Remove fixture files only
             if (tempDir) {
                 fs.rmSync(tempDir, { recursive: true, force: true });
             }
