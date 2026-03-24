@@ -15,11 +15,12 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import http from 'http';
 import open from 'open';
-import os from 'os';
 import {createEmailMessage, createEmailWithNodemailer} from "./utl.js";
 import { InlineImageSchema, SendEmailSchema } from './schemas.js';
 import { createLabel, updateLabel, deleteLabel, listLabels, findLabelByName, getOrCreateLabel, GmailLabel } from "./label-manager.js";
 import { createFilter, listFilters, getFilter, deleteFilter, filterTemplates, GmailFilterCriteria, GmailFilterAction } from "./filter-manager.js";
+import { CONFIG_DIR, OAUTH_PATH, CREDENTIALS_PATH } from './config.js';
+
 
 // Security modules
 import {
@@ -75,31 +76,6 @@ function getConfiguredScopes(): string[] {
     
     return scopes;
 }
-
-// Configuration paths
-// Ensure proper path handling for cross-platform environments
-const CONFIG_DIR = (() => {
-    if (process.env.GMAIL_CONFIG_DIR) {
-        return process.env.GMAIL_CONFIG_DIR;
-    }
-    const home = os.homedir();
-    // Ensure we're using proper path separators
-    return path.join(home, '.gmail-mcp');
-})();
-
-const OAUTH_PATH = (() => {
-    if (process.env.GMAIL_OAUTH_PATH) {
-        return process.env.GMAIL_OAUTH_PATH;
-    }
-    // Check current working directory first
-    const localPath = path.join(process.cwd(), 'gcp-oauth.keys.json');
-    if (fs.existsSync(localPath)) {
-        return localPath;
-    }
-    return path.join(CONFIG_DIR, 'gcp-oauth.keys.json');
-})();
-
-const CREDENTIALS_PATH = process.env.GMAIL_CREDENTIALS_PATH || path.join(CONFIG_DIR, 'credentials.json');
 
 /**
  * Root directory that constrains all file reads performed by this server

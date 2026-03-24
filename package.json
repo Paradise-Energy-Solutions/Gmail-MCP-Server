@@ -11,9 +11,10 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "auth": "node dist/index.js auth",
+    "reauth": "node reauth.js",
     "prepare": "npm run build",
     "prepublishOnly": "npm run build",
-    "test": "node --test dist/__tests__/audit-logger.test.js dist/__tests__/credential-security.test.js dist/__tests__/rate-limiter.test.js dist/__tests__/security-integration.test.js dist/__tests__/validators.test.js dist/__tests__/inline-send.test.js",
+    "test": "node --test dist/__tests__/audit-logger.test.js dist/__tests__/credential-security.test.js dist/__tests__/rate-limiter.test.js dist/__tests__/security-integration.test.js dist/__tests__/validators.test.js dist/__tests__/inline-send.test.js dist/__tests__/config.test.js",
     "test:integration": "GMAIL_INTEGRATION=1 node --test dist/__tests__/gmail-draft-integration.test.js"
   },
   "files": [
