@@ -112,6 +112,8 @@ Before using this MCP server, please understand the following:
 
 ### Step 2: Set Up Credentials Directory
 
+**macOS / Linux (bash):**
+
 ```bash
 # Create the credentials directory
 mkdir -p ~/.gmail-mcp
@@ -124,7 +126,21 @@ chmod 700 ~/.gmail-mcp
 chmod 600 ~/.gmail-mcp/gcp-oauth.keys.json
 ```
 
+**Windows (PowerShell):**
+
+```powershell
+# Create the credentials directory
+New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.gmail-mcp"
+
+# Move your OAuth keys file (run from the folder containing the downloaded JSON)
+Move-Item -Path .\gcp-oauth.keys.json -Destination "$env:USERPROFILE\.gmail-mcp\"
+```
+
+> NTFS does not use `chmod`. The `~/.gmail-mcp` folder inherits the permissions of your Windows user profile, which already restricts access to your account. If you need to explicitly lock the directory down further, see [Permission Errors](#permission-errors) in Troubleshooting.
+
 ### Step 3: Build the Server
+
+**macOS / Linux (bash):**
 
 ```bash
 cd /path/to/gmail-mcp-server
@@ -132,13 +148,31 @@ npm install
 npm run build
 ```
 
+**Windows (PowerShell):**
+
+```powershell
+cd C:\path\to\gmail-mcp-server
+npm install
+npm run build
+```
+
 ### Step 4: Authenticate
+
+**macOS / Linux (bash):**
 
 ```bash
 node dist/index.js auth
 ```
 
-This will open your browser for Google OAuth authentication. After successful authentication, credentials will be saved to `~/.gmail-mcp/credentials.json`.
+**Windows (PowerShell):**
+
+```powershell
+node dist\index.js auth
+```
+
+This will open your browser for Google OAuth authentication. After successful authentication, credentials will be saved to `~/.gmail-mcp/credentials.json` (`%USERPROFILE%\.gmail-mcp\credentials.json` on Windows).
+
+> **PowerShell execution policy**: if `npm` or `npm run build` fails with a message about running scripts being disabled on this system, PowerShell's script execution policy is blocking the `npm.ps1` shim. Run PowerShell as Administrator and execute `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, then retry. This is a one-time, per-user setting.
 
 ---
 
@@ -162,6 +196,37 @@ Add the following to your VS Code `mcp.json` (typically at `~/.config/Code/User/
   }
 }
 ```
+
+### Native Windows Configuration
+
+When running VS Code natively on Windows (not WSL), use Windows-style paths with **double-escaped backslashes** in `mcp.json`, since it's a JSON file:
+
+```json
+{
+  "servers": {
+    "gmail": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["C:\\Users\\USERNAME\\gmail-mcp-server\\dist\\index.js"],
+      "env": {
+        "GMAIL_OAUTH_PATH": "C:\\Users\\USERNAME\\.gmail-mcp\\gcp-oauth.keys.json"
+      }
+    }
+  }
+}
+```
+
+The VS Code `mcp.json` file is typically located at `%APPDATA%\Code\User\mcp.json` (i.e. `C:\Users\USERNAME\AppData\Roaming\Code\User\mcp.json`).
+
+**Setting environment variables in PowerShell** (for testing from a terminal, e.g. `npm run auth` or `npm run reauth`):
+
+```powershell
+$env:GMAIL_OAUTH_PATH = "C:\Users\USERNAME\.gmail-mcp\gcp-oauth.keys.json"
+$env:GMAIL_MCP_SCOPE_LEVEL = "STANDARD"
+node dist\index.js auth
+```
+
+Note that `$env:VAR = "value"` only persists for the current PowerShell session. To set it permanently for your user account, use `[Environment]::SetEnvironmentVariable("GMAIL_OAUTH_PATH", "C:\Users\USERNAME\.gmail-mcp\gcp-oauth.keys.json", "User")` and restart your terminal (and VS Code) for it to take effect.
 
 ### WSL (Windows Subsystem for Linux) Configuration
 
@@ -321,9 +386,12 @@ Combine operators: `from:boss@company.com after:2024/01/01 has:attachment`
 **Error**: `OAuth keys file not found. Please place gcp-oauth.keys.json in current directory or ~/.gmail-mcp`
 
 **Solutions**:
-1. Verify the file exists: `ls -la ~/.gmail-mcp/gcp-oauth.keys.json`
+1. Verify the file exists:
+   - macOS/Linux: `ls -la ~/.gmail-mcp/gcp-oauth.keys.json`
+   - Windows (PowerShell): `Test-Path "$env:USERPROFILE\.gmail-mcp\gcp-oauth.keys.json"`
 2. Check environment variable path is correct
 3. **For WSL**: Ensure you're using `//wsl.localhost/Ubuntu/...` paths in your VS Code configuration
+4. **For native Windows**: Ensure backslashes are escaped (`\\`) in `mcp.json`, since it's a JSON file
 
 ### WSL Path Issues
 
@@ -352,11 +420,17 @@ Combine operators: `from:boss@company.com after:2024/01/01 has:attachment`
 
 **Error**: Cannot read/write credential files
 
-**Solution**:
+**Solution (macOS/Linux)**:
 ```bash
 chmod 700 ~/.gmail-mcp
 chmod 600 ~/.gmail-mcp/*.json
 ```
+
+**Solution (Windows)**: NTFS permissions are managed differently than POSIX. If you need to explicitly restrict `.gmail-mcp` to only your account (e.g. on a shared machine), run in PowerShell:
+```powershell
+icacls "$env:USERPROFILE\.gmail-mcp" /inheritance:r /grant:r "$env:USERNAME:(OI)(CI)F"
+```
+This removes inherited permissions and grants full control only to the current user. Most single-user Windows machines don't need this — the profile folder is already private to your account.
 
 ### Attachment Issues
 
